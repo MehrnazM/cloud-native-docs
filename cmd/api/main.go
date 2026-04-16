@@ -10,6 +10,7 @@ import (
 
 	"github.com/MehrnazM/cloud-native-docs/internal/http"
 	"github.com/MehrnazM/cloud-native-docs/internal/messaging"
+	"github.com/MehrnazM/cloud-native-docs/internal/repository"
 	"github.com/MehrnazM/cloud-native-docs/internal/service"
 )
 
@@ -26,6 +27,14 @@ func main() {
 		slog.Error("failed to connect to NATS", "error", err)
 		os.Exit(1)
 	}
+	defer jsConn.NC.Close()
+
+	db, err := repository.NewPostgresDB()
+	if err != nil {
+		slog.Error("failed to connect to PostgreSQL", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
 
 	svc := service.NewDocumentService(jsConn)
 
@@ -55,7 +64,7 @@ func main() {
 		// Graceful HTTP shutdown
 		shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 		defer cancel()
-		jsConn.NC.Close()
+
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			slog.Error("graceful shutdown failed", "error", err)
 			os.Exit(1)

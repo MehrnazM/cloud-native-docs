@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS documents.idx_documents_id;

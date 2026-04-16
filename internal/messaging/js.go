@@ -3,12 +3,10 @@ package messaging
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
-	"os"
-	"strconv"
 	"time"
 
+	"github.com/MehrnazM/cloud-native-docs/shared/util"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -19,19 +17,15 @@ type Connection struct {
 }
 
 func NewConnection() (conn *Connection, err error) {
-	url := os.Getenv("NATS_URL")
-	if url == "" {
+	url, err := util.MustGetString("NATS_URL")
+	if err != nil || url == "" {
 		return nil, nats.ErrNoServers
 	}
 	var nc *nats.Conn
-	retry := os.Getenv("NATS_CONN_RETRY")
-	if retry == "" {
-		retry = "10"
-	}
-	// Connect to NATS
-	retryCount, err := strconv.Atoi(retry)
+	retryCount, err := util.GetIntEnv("NATS_RETRY_COUNT", 10)
 	if err != nil {
-		return nil, fmt.Errorf("invalid NATS_CONN_RETRY value: %w", err)
+		slog.Error("Invalid NATS_RETRY_COUNT value", "error", err)
+		return nil, err
 	}
 	for i := 0; i < retryCount; i++ {
 		nc, err = nats.Connect(url)

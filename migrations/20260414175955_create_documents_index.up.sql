@@ -1,0 +1,1 @@
+CREATE INDEX idx_documents_id ON documents.documents(id);

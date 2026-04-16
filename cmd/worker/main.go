@@ -6,13 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/MehrnazM/cloud-native-docs/internal/messaging"
 	"github.com/MehrnazM/cloud-native-docs/internal/worker"
 	"github.com/MehrnazM/cloud-native-docs/shared/events"
+	"github.com/MehrnazM/cloud-native-docs/shared/util"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -36,13 +36,9 @@ func main() {
 	worker := worker.NewProcessor()
 
 	var stream jetstream.Stream
-	replica := os.Getenv("NATS_STREAM_REPLICAS")
-	if replica == "" {
-		replica = "1"
-	}
-	replicas, err := strconv.Atoi(replica)
+	replicas, err := util.GetIntEnv("NATS_REPLICA", 1)
 	if err != nil {
-		slog.Error("Invalid NATS_STREAM_REPLICAS value", "error", err)
+		slog.Error("Invalid NATS_REPLICA value", "error", err)
 		os.Exit(1)
 	}
 	setupCtx, setupCancel := context.WithTimeout(context.Background(), 30*time.Second)
