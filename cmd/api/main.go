@@ -36,7 +36,8 @@ func main() {
 	}
 	defer db.Close()
 
-	svc := service.NewDocumentService(jsConn)
+	repo := repository.NewDocumentsRepository(db)
+	svc := service.NewDocumentService(jsConn, repo)
 
 	router := http.NewRouter(svc, jsConn.NC.IsConnected)
 	server := http.NewServer(addr, router)

@@ -37,7 +37,7 @@ func CreateDocument(svc *service.DocumentService) gin.HandlerFunc {
 			})
 			return
 		}
-		id, err := svc.CreateDocument(c.Request.Context(), req.Name, c.GetString("requestID"))
+		id, err := svc.CreateDocument(c.Request.Context(), req.Name)
 		if err != nil {
 			slog.Error("failed to create document: ", "error", err)
 			c.JSON(500, ErrorResponse{
