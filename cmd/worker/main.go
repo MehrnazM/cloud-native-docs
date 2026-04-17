@@ -42,7 +42,7 @@ func main() {
 	defer db.Close()
 
 	repo := repository.NewDocumentsRepository(db)
-	worker := worker.NewProcessor(repo)
+	w := worker.NewProcessor(repo)
 
 	var stream jetstream.Stream
 	replicas, err := util.GetIntEnv("NATS_REPLICA", 1)
@@ -113,31 +113,49 @@ func main() {
 			msg.Nak()
 			return
 		}
-		locked, err := worker.MarkAsProcessing(consumeCtx, event.ID)
+
+		skip, retryCount, err := w.ReachedMaxRetries(consumeCtx, event.ID)
+		if err != nil {
+			slog.Error("Failed to check retry count", "id", event.ID, "error", err)
+			msg.Nak()
+			return
+		}
+		if skip {
+			msg.Ack()
+			return
+		}
+
+		locked, err := w.MarkAsProcessing(consumeCtx, event.ID)
 		if err != nil {
 			slog.Error("Failed to mark document as processing", "id", event.ID, "error", err)
 			msg.Nak()
 			return
 		}
+
 		if !locked {
 			slog.Info("Document is already being processed by another worker", "id", event.ID)
-			err = msg.Ack()
-			if err != nil {
-				slog.Error("Failed to acknowledge message", "error", err)
-			}
+			msg.Ack()
 			return
 		}
-		err = worker.ProcessWithContext(consumeCtx, event)
+		processResult, err := w.Process(consumeCtx, event)
 		if err != nil {
 			msg.Nak()
 			slog.Error("Failed to process message", "error", err)
 			return
 		}
+		if processResult == worker.ProcessFailed {
+			slog.Error("Document processing failed, will retry if max retries not reached", "id", event.ID)
 
-		err = msg.Ack()
-		if err != nil {
-			slog.Error("Failed to acknowledge message", "error", err)
+			err = w.IncrementRetryCount(consumeCtx, event.ID)
+			if err != nil {
+				slog.Error("Failed to increment retry count", "id", event.ID, "error", err)
+			}
+			time.Sleep(time.Duration(retryCount+2) * time.Second)
+			msg.Nak()
 			return
+		} else {
+			slog.Info("Document processed successfully", "id", event.ID)
+			msg.Ack()
 		}
 
 	})

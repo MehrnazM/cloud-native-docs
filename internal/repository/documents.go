@@ -43,12 +43,20 @@ func (r *DocumentsRepository) UpdateDocumentStatus(ctx context.Context, id uuid.
 }
 
 func (r *DocumentsRepository) GeDocumentByID(ctx context.Context, id uuid.UUID) (*model.Document, error) {
-	query := `SELECT id, name, status, created_at, updated_at FROM documents.documents WHERE id = $1`
+	query := `SELECT 
+					id, 
+					name, 
+					status, 
+					retry_count, 
+					max_retries, 
+					created_at, 
+					updated_at 
+				FROM documents.documents WHERE id = $1`
 
 	row := r.db.QueryRowContext(ctx, query, id)
 
 	var doc model.Document
-	err := row.Scan(&doc.ID, &doc.Name, &doc.Status, &doc.CreatedAt, &doc.UpdatedAt)
+	err := row.Scan(&doc.ID, &doc.Name, &doc.Status, &doc.RetryCount, &doc.MaxRetries, &doc.CreatedAt, &doc.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -62,9 +70,11 @@ func (r *DocumentsRepository) GeDocumentByID(ctx context.Context, id uuid.UUID) 
 func (r *DocumentsRepository) MarkAsProcessing(ctx context.Context, id uuid.UUID) (bool, error) {
 	query := `UPDATE documents.documents
 	          SET status = $1, updated_at = NOW()
-			  WHERE id = $2 AND status = $3`
+			  WHERE id = $2 AND (
+			  status = $3
+			  OR (status = $4 AND retry_count < max_retries))`
 
-	res, err := r.db.ExecContext(ctx, query, model.StatusProcessing, id, model.StatusPending)
+	res, err := r.db.ExecContext(ctx, query, model.StatusProcessing, id, model.StatusPending, model.StatusFailed)
 	if err != nil {
 		return false, err
 	}
@@ -74,4 +84,20 @@ func (r *DocumentsRepository) MarkAsProcessing(ctx context.Context, id uuid.UUID
 		return false, err
 	}
 	return rowsAffected == 1, nil
+}
+
+func (r *DocumentsRepository) IncrementRetryCount(ctx context.Context, id uuid.UUID) (int64, error) {
+	query := `UPDATE documents.documents
+	          SET retry_count = retry_count + 1, updated_at = NOW()
+			  WHERE id = $1`
+
+	res, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return 0, err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rowsAffected, nil
 }
