@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MehrnazM/cloud-native-docs/internal/messaging"
+	"github.com/MehrnazM/cloud-native-docs/internal/repository"
 	"github.com/MehrnazM/cloud-native-docs/internal/worker"
 	"github.com/MehrnazM/cloud-native-docs/shared/events"
 	"github.com/MehrnazM/cloud-native-docs/shared/util"
@@ -33,7 +34,15 @@ func main() {
 
 	slog.Info("Connected to NATS", "status", conn.NC.Status())
 
-	worker := worker.NewProcessor()
+	db, err := repository.NewPostgresDB()
+	if err != nil {
+		slog.Error("Failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	repo := repository.NewDocumentsRepository(db)
+	worker := worker.NewProcessor(repo)
 
 	var stream jetstream.Stream
 	replicas, err := util.GetIntEnv("NATS_REPLICA", 1)
@@ -104,16 +113,33 @@ func main() {
 			msg.Nak()
 			return
 		}
-
-		// Pass context for cancellation support
-		err = worker.ProcessWithContext(consumeCtx, event)
+		locked, err := worker.MarkAsProcessing(consumeCtx, event.ID)
 		if err != nil {
-			slog.Error("Failed to process message", "error", err)
+			slog.Error("Failed to mark document as processing", "id", event.ID, "error", err)
 			msg.Nak()
 			return
 		}
+		if !locked {
+			slog.Info("Document is already being processed by another worker", "id", event.ID)
+			err = msg.Ack()
+			if err != nil {
+				slog.Error("Failed to acknowledge message", "error", err)
+			}
+			return
+		}
+		err = worker.ProcessWithContext(consumeCtx, event)
+		if err != nil {
+			msg.Nak()
+			slog.Error("Failed to process message", "error", err)
+			return
+		}
 
-		msg.Ack()
+		err = msg.Ack()
+		if err != nil {
+			slog.Error("Failed to acknowledge message", "error", err)
+			return
+		}
+
 	})
 	if err != nil {
 		slog.Error("Failed to start consuming", "error", err)

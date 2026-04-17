@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/MehrnazM/cloud-native-docs/internal/model"
 	"github.com/MehrnazM/cloud-native-docs/internal/repository"
 	"github.com/MehrnazM/cloud-native-docs/shared/events"
 	"github.com/google/uuid"
@@ -30,13 +31,13 @@ func NewDocumentService(publisher Publisher, repo *repository.DocumentsRepositor
 }
 
 func (s *DocumentService) CreateDocument(ctx context.Context, name string) (string, error) {
-	id := uuid.New().String()
+	id := uuid.New()
 
 	event := events.DocumentCreatedEvent{}
 	event.ID = id
 	event.Name = name
 
-	if err := s.repo.CreateDocument(ctx, uuid.MustParse(id), name); err != nil {
+	if err := s.repo.CreateDocument(ctx, id, name); err != nil {
 		return "", fmt.Errorf("failed to create document: %w", err)
 	}
 
@@ -44,5 +45,15 @@ func (s *DocumentService) CreateDocument(ctx context.Context, name string) (stri
 		return "", fmt.Errorf("publish failed: %w", err)
 	}
 
-	return id, nil
+	return id.String(), nil
+}
+
+func (s *DocumentService) GetDocumentByID(ctx context.Context, id uuid.UUID) (*model.Document, error) {
+
+	doc, err := s.repo.GeDocumentByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get document: %w", err)
+	}
+
+	return doc, nil
 }
