@@ -42,7 +42,7 @@ func (r *DocumentsRepository) UpdateDocumentStatus(ctx context.Context, id uuid.
 	return rowsAffected, nil
 }
 
-func (r *DocumentsRepository) GeDocumentByID(ctx context.Context, id uuid.UUID) (*model.Document, error) {
+func (r *DocumentsRepository) GetDocumentByID(ctx context.Context, id uuid.UUID) (*model.Document, error) {
 	query := `SELECT 
 					id, 
 					name, 
@@ -69,12 +69,20 @@ func (r *DocumentsRepository) GeDocumentByID(ctx context.Context, id uuid.UUID) 
 
 func (r *DocumentsRepository) MarkAsProcessing(ctx context.Context, id uuid.UUID) (bool, error) {
 	query := `UPDATE documents.documents
-	          SET status = $1, updated_at = NOW()
+	          SET status = $1, 
+			  	  updated_at = NOW(),
+				  locked_at = NOW()
 			  WHERE id = $2 AND (
 			  status = $3
-			  OR (status = $4 AND retry_count < max_retries))`
+			  OR (status = $4 AND retry_count < max_retries))
+			  OR (status = $5 AND locked_at < NOW() - INTERVAL '5 minute')`
 
-	res, err := r.db.ExecContext(ctx, query, model.StatusProcessing, id, model.StatusPending, model.StatusFailed)
+	res, err := r.db.ExecContext(ctx, query,
+		model.StatusProcessing,
+		id,
+		model.StatusPending,
+		model.StatusFailed,
+		model.StatusProcessing)
 	if err != nil {
 		return false, err
 	}
@@ -90,6 +98,20 @@ func (r *DocumentsRepository) IncrementRetryCount(ctx context.Context, id uuid.U
 	query := `UPDATE documents.documents
 	          SET retry_count = retry_count + 1, updated_at = NOW()
 			  WHERE id = $1`
+
+	res, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return 0, err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rowsAffected, nil
+}
+
+func (r *DocumentsRepository) DeleteDocument(ctx context.Context, id uuid.UUID) (int64, error) {
+	query := `DELETE FROM documents.documents WHERE id = $1`
 
 	res, err := r.db.ExecContext(ctx, query, id)
 	if err != nil {

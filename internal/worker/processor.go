@@ -29,7 +29,7 @@ func NewProcessor(repo *repository.DocumentsRepository) *Processor {
 }
 
 func (p *Processor) ReachedMaxRetries(ctx context.Context, id uuid.UUID) (maxedOut bool, retryCount int, err error) {
-	doc, err := p.repo.GeDocumentByID(ctx, id)
+	doc, err := p.repo.GetDocumentByID(ctx, id)
 	if err != nil {
 		return false, 0, err
 	}

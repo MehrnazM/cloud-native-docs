@@ -150,8 +150,7 @@ func main() {
 			if err != nil {
 				slog.Error("Failed to increment retry count", "id", event.ID, "error", err)
 			}
-			time.Sleep(time.Duration(retryCount+2) * time.Second)
-			msg.Nak()
+			msg.NakWithDelay(time.Duration(retryCount+2) * time.Second)
 			return
 		} else {
 			slog.Info("Document processed successfully", "id", event.ID)
@@ -173,6 +172,7 @@ func main() {
 	sig := <-shutdown
 	slog.Info("Shutdown signal received", "signal", sig)
 
+	consumeHandle.Drain()
 	consumeCancel()
 	slog.Info("Worker shutdown complete")
 }

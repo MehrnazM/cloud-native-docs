@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/MehrnazM/cloud-native-docs/shared/util"
 	_ "github.com/lib/pq"
@@ -37,7 +38,9 @@ func NewPostgresDB() (dbConn *sql.DB, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 	}
-
+	dbConn.SetMaxOpenConns(25)
+	dbConn.SetMaxIdleConns(5)
+	dbConn.SetConnMaxLifetime(5 * time.Minute)
 	if err := dbConn.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
 	}

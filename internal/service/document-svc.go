@@ -42,6 +42,7 @@ func (s *DocumentService) CreateDocument(ctx context.Context, name string) (stri
 	}
 
 	if err := s.Publisher.Publish(ctx, SubjectDocumentCreated, event, 100*time.Millisecond); err != nil {
+		s.repo.DeleteDocument(ctx, id)
 		return "", fmt.Errorf("publish failed: %w", err)
 	}
 
@@ -50,7 +51,7 @@ func (s *DocumentService) CreateDocument(ctx context.Context, name string) (stri
 
 func (s *DocumentService) GetDocumentByID(ctx context.Context, id uuid.UUID) (*model.Document, error) {
 
-	doc, err := s.repo.GeDocumentByID(ctx, id)
+	doc, err := s.repo.GetDocumentByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get document: %w", err)
 	}
