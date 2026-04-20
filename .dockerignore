@@ -1,0 +1,21 @@
+.git
+.gitignore
+.vscode
+.env
+
+# binaries
+api
+worker
+*.exe
+*.out
+
+# build artifacts
+bin/
+dist/
+build/
+
+# logs
+*.log
+
+# OS files
+.DS_Store

@@ -1,0 +1,22 @@
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /app 
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . . 
+
+RUN go build -o api ./cmd/api 
+RUN go build -o worker ./cmd/worker 
+
+FROM alpine:3.20
+
+WORKDIR /app 
+
+COPY --from=builder /app/api .
+COPY --from=builder /app/worker . 
+
+RUN apk add --no-cache ca-certificates 
+
+CMD ["./api"]
