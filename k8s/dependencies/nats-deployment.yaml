@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-deployment
+spec:
+  replicas: 1 
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+    spec:
+      containers:
+      - name: nats
+        image: nats:2.10-alpine
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+        args: ["-js", "-sd", "/data"]
+        ports:
+        - containerPort: 4222
+          name: client
+        volumeMounts:
+        - name: nats-data
+          mountPath: /data
+      volumes:
+      - name: nats-data
+        emptyDir: {}

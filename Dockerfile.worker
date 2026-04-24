@@ -15,8 +15,9 @@ FROM alpine:3.20
 WORKDIR /app 
 
 COPY --from=builder /app/api .
-COPY --from=builder /app/worker . 
+COPY --from=builder /app/worker .
+COPY migrations /migrations
 
 RUN apk add --no-cache ca-certificates 
 
-CMD ["./api"]
+CMD ["./worker"]
