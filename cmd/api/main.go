@@ -12,6 +12,7 @@ import (
 	"github.com/MehrnazM/cloud-native-docs/internal/messaging"
 	"github.com/MehrnazM/cloud-native-docs/internal/repository"
 	"github.com/MehrnazM/cloud-native-docs/internal/service"
+	"github.com/MehrnazM/cloud-native-docs/shared/util"
 )
 
 const (
@@ -19,19 +20,37 @@ const (
 	shutdownTimeout = 20 * time.Second
 )
 
+var logger *slog.Logger
+
+func init() {
+	var level slog.Leveler
+	levelInt, err := util.GetIntEnv("SLOG_LEVEL", int(slog.LevelDebug))
+	if err != nil {
+		level = slog.LevelDebug
+	} else {
+		level = slog.Level(levelInt)
+	}
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	})
+	logger = slog.New(handler)
+	logger = logger.With("service", "api")
+	slog.SetDefault(logger)
+}
+
 func main() {
 	ctx := context.Background()
 
-	jsConn, err := messaging.NewConnection()
+	jsConn, err := messaging.NewConnection(logger)
 	if err != nil {
-		slog.Error("failed to connect to NATS", "error", err)
+		logger.Error("failed to connect to NATS", "error", err)
 		os.Exit(1)
 	}
 	defer jsConn.NC.Close()
 
 	db, err := repository.NewPostgresDB()
 	if err != nil {
-		slog.Error("failed to connect to PostgreSQL", "error", err)
+		logger.Error("failed to connect to PostgreSQL", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
@@ -39,7 +58,7 @@ func main() {
 	repo := repository.NewDocumentsRepository(db)
 	svc := service.NewDocumentService(jsConn, repo)
 
-	router := http.NewRouter(svc, jsConn.NC.IsConnected)
+	router := http.NewRouter(svc, jsConn.NC.IsConnected, logger)
 	server := http.NewServer(addr, router)
 
 	// Start HTTP server
@@ -56,22 +75,22 @@ func main() {
 
 	select {
 	case err := <-serverErrors:
-		slog.Error("server failed", "error", err)
+		logger.Error("server failed", "error", err)
 		os.Exit(1)
 
 	case sig := <-shutdown:
-		slog.Info("shutdown initiated", "signal", sig)
+		logger.Info("shutdown initiated", "signal", sig)
 
 		// Graceful HTTP shutdown
 		shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 		defer cancel()
 
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			slog.Error("graceful shutdown failed", "error", err)
+			logger.Error("graceful shutdown failed", "error", err)
 			os.Exit(1)
 		}
 
-		slog.Info("shutdown complete")
+		logger.Info("shutdown complete")
 	}
 
 }

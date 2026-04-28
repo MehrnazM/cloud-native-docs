@@ -16,7 +16,7 @@ type Connection struct {
 	NC *nats.Conn
 }
 
-func NewConnection() (conn *Connection, err error) {
+func NewConnection(logger *slog.Logger) (conn *Connection, err error) {
 	url, err := util.MustGetString("NATS_URL")
 	if err != nil || url == "" {
 		return nil, nats.ErrNoServers
@@ -24,7 +24,7 @@ func NewConnection() (conn *Connection, err error) {
 	var nc *nats.Conn
 	retryCount, err := util.GetIntEnv("NATS_RETRY_COUNT", 10)
 	if err != nil {
-		slog.Error("Invalid NATS_RETRY_COUNT value", "error", err)
+		logger.Error("Invalid NATS_RETRY_COUNT value", "error", err)
 		return nil, err
 	}
 	for i := 0; i < retryCount; i++ {
@@ -32,7 +32,7 @@ func NewConnection() (conn *Connection, err error) {
 		if err == nil {
 			break
 		}
-		slog.Warn("NATS connection failed, retrying", "attempt", i+1, "error", err)
+		logger.Warn("NATS connection failed, retrying", "attempt", i+1, "error", err)
 		time.Sleep(2 * time.Second)
 	}
 	if err != nil {

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/MehrnazM/cloud-native-docs/internal/http/handler"
@@ -9,12 +10,17 @@ import (
 	"github.com/google/uuid"
 )
 
-func NewRouter(svc *service.DocumentService, workerConnCheck func() bool) *gin.Engine {
+func NewRouter(svc *service.DocumentService, workerConnCheck func() bool, logger *slog.Logger) *gin.Engine {
 	router := gin.Default()
+
+	h := handler.NewHandler(svc, logger)
+
 	v1 := router.Group("/api/v1")
 	v1.Use(requestID())
-	handler.RegisterDocumentRoutes(v1, svc)
-	handler.RegisterAdminRoutes(v1, workerConnCheck)
+
+	h.RegisterDocumentRoutes(v1)
+	h.RegisterAdminRoutes(v1, workerConnCheck)
+
 	router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": "route not found",

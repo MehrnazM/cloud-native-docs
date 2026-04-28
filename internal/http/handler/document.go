@@ -10,20 +10,29 @@ import (
 	"github.com/google/uuid"
 )
 
-func RegisterDocumentRoutes(r *gin.RouterGroup, svc *service.DocumentService) {
-	r.POST("/documents", CreateDocument(svc))
-	r.GET("/documents/:id", GetDocumentByID(svc))
+type Handler struct {
+	logger *slog.Logger
+	svc    *service.DocumentService
+}
+
+func NewHandler(svc *service.DocumentService, logger *slog.Logger) *Handler {
+	return &Handler{svc: svc, logger: logger}
+}
+
+func (h *Handler) RegisterDocumentRoutes(r *gin.RouterGroup) {
+	r.POST("/documents", h.CreateDocument())
+	r.GET("/documents/:id", h.GetDocumentByID())
 }
 
 type CreateDocumentRequest struct {
 	Name string `json:"name" binding:"required,min=1,max=255"`
 }
 
-func CreateDocument(svc *service.DocumentService) gin.HandlerFunc {
+func (h *Handler) CreateDocument() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req CreateDocumentRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			slog.Error("failed to read and validate the body: ", "error", err)
+			h.logger.Error("failed to read and validate the body: ", "error", err)
 			c.JSON(400, ErrorResponse{
 				Error:   "failed to read and validate the body",
 				Code:    ErrCodeValidation,
@@ -39,9 +48,9 @@ func CreateDocument(svc *service.DocumentService) gin.HandlerFunc {
 			})
 			return
 		}
-		id, err := svc.CreateDocument(c.Request.Context(), req.Name)
+		id, err := h.svc.CreateDocument(c.Request.Context(), req.Name, c.GetString("requestID"))
 		if err != nil {
-			slog.Error("failed to create document: ", "error", err)
+			h.logger.Error("failed to create document: ", "error", err)
 			c.JSON(500, ErrorResponse{
 				Error: "failed to create document",
 				Code:  ErrCodeInternal,
@@ -56,12 +65,12 @@ func CreateDocument(svc *service.DocumentService) gin.HandlerFunc {
 	}
 }
 
-func GetDocumentByID(svc *service.DocumentService) gin.HandlerFunc {
+func (h *Handler) GetDocumentByID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 		uid, err := uuid.Parse(id)
 		if err != nil {
-			slog.Error("invalid document id: ", "error", err)
+			h.logger.Error("invalid document id: ", "error", err)
 			c.JSON(400, ErrorResponse{
 				Error:   "invalid document id",
 				Code:    ErrCodeValidation,
@@ -69,9 +78,9 @@ func GetDocumentByID(svc *service.DocumentService) gin.HandlerFunc {
 			})
 			return
 		}
-		doc, err := svc.GetDocumentByID(c.Request.Context(), uid)
+		doc, err := h.svc.GetDocumentByID(c.Request.Context(), uid)
 		if err != nil {
-			slog.Error("failed to get document: ", "error", err)
+			h.logger.Error("failed to get document: ", "error", err)
 			c.JSON(500, ErrorResponse{
 				Error: "failed to get document",
 				Code:  ErrCodeInternal,

@@ -16,6 +16,8 @@ spec:
       - name: worker
         image: mehrnazm/docs-worker:v1.0.0
         imagePullPolicy: Always
+        ports:
+        - containerPort: 9090
         resources:
           limits:
             memory: "128Mi"
@@ -23,6 +25,11 @@ spec:
           requests:
             memory: "64Mi"
             cpu: "100m"
+        livenessProbe:
+          exec:
+            command: ["pgrep", "worker"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
         env:
           - name: POSTGRES_HOST
             value: postgres-svc
@@ -45,3 +52,15 @@ spec:
               secretKeyRef:
                 key: POSTGRES_DB
                 name: postgres-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-svc
+spec:
+  type: ClusterIP
+  selector:
+    app: worker
+  ports:
+  - port: 9090
+    targetPort: 9090

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,8 @@ import (
 	"github.com/MehrnazM/cloud-native-docs/shared/events"
 	"github.com/MehrnazM/cloud-native-docs/shared/util"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -23,40 +26,113 @@ const (
 	ConsumerName           = "WORKER_CONSUMER"
 )
 
+var (
+	processedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "documents_processed_total",
+			Help: "Total processed documents",
+		},
+	)
+
+	failedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "documents_failed_total",
+			Help: "Total failed documents",
+		},
+	)
+	inProgressCounter = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "documents_in_processing",
+			Help: "Current documents being processed",
+		},
+	)
+)
+var logger *slog.Logger
+
+func init() {
+	var level slog.Leveler
+	levelInt, err := util.GetIntEnv("SLOG_LEVEL", int(slog.LevelDebug))
+	if err != nil {
+		level = slog.LevelDebug
+	} else {
+		level = slog.Level(levelInt)
+	}
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	})
+	logger = slog.New(handler)
+	logger = logger.With("service", "worker", "operation", "document_processing")
+	slog.SetDefault(logger)
+
+	prometheus.MustRegister(processedCounter, failedCounter, inProgressCounter)
+}
+
 func main() {
 
-	conn, err := messaging.NewConnection()
+	conn, err := messaging.NewConnection(logger)
 	if err != nil {
-		slog.Error("Failed to connect to NATS", "error", err)
+		logger.Error("Failed to connect to NATS", "error", err)
 		os.Exit(1)
 	}
 	defer conn.NC.Close()
 
-	slog.Info("Connected to NATS", "status", conn.NC.Status())
+	logger.Info("Connected to NATS", "status", conn.NC.Status())
 
 	db, err := repository.NewPostgresDB()
 	if err != nil {
-		slog.Error("Failed to connect to database", "error", err)
+		logger.Error("Failed to connect to database", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
 	repo := repository.NewDocumentsRepository(db)
-	w := worker.NewProcessor(repo)
+	w := worker.NewProcessor(repo, logger)
 
-	var stream jetstream.Stream
-	replicas, err := util.GetIntEnv("NATS_REPLICA", 1)
-	if err != nil {
-		slog.Error("Invalid NATS_REPLICA value", "error", err)
-		os.Exit(1)
-	}
-	setupCtx, setupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer setupCancel()
+	consumer := getConsumer(conn)
 
 	consumeCtx, consumeCancel := context.WithCancel(context.Background())
 	defer consumeCancel()
 
-	stream, err = conn.JS.Stream(setupCtx, StreamName)
+	consumeHandle, err := consumer.Consume(func(msg jetstream.Msg) {
+		process(consumeCtx, msg, w)
+	})
+	if err != nil {
+		logger.Error("Failed to start consuming", "error", err)
+		os.Exit(1)
+	}
+	defer consumeHandle.Stop()
+
+	logger.Info("Worker started successfully", "consumer", ConsumerName)
+
+	// Start HTTP server for Prometheus metrics
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		http.ListenAndServe(":9090", nil)
+	}()
+
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+
+	sig := <-shutdown
+	logger.Info("Shutdown signal received", "signal", sig)
+
+	consumeHandle.Drain()
+	consumeCancel()
+	logger.Info("Worker shutdown complete")
+}
+
+// getConsumer ensures the stream and consumer are set up correctly and returns the consumer for processing messages.
+func getConsumer(conn *messaging.Connection) jetstream.Consumer {
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer setupCancel()
+
+	replicas, err := util.GetIntEnv("NATS_REPLICA", 1)
+	if err != nil {
+		logger.Error("Invalid NATS_REPLICA value", "error", err)
+		os.Exit(1)
+	}
+
+	stream, err := conn.JS.Stream(setupCtx, StreamName)
 	if err != nil {
 		if err == jetstream.ErrStreamNotFound {
 			stream, err = conn.JS.CreateStream(setupCtx, jetstream.StreamConfig{
@@ -70,20 +146,19 @@ func main() {
 				Storage:   jetstream.FileStorage,
 			})
 			if err != nil {
-				slog.Error("Failed to create stream", "error", err)
+				logger.Error("Failed to create stream", "error", err)
 				os.Exit(1)
 			}
-			slog.Info("Created stream", "stream", StreamName)
+			logger.Info("Created stream", "stream", StreamName)
 		} else {
-			slog.Error("Failed to get stream", "error", err)
+			logger.Error("Failed to get stream", "error", err)
 			os.Exit(1)
 		}
 	}
 
-	slog.Info("Stream is ready", "stream", StreamName)
+	logger.Info("Stream is ready", "stream", StreamName)
 
-	var consumer jetstream.Consumer
-	consumer, err = stream.Consumer(setupCtx, ConsumerName)
+	consumer, err := stream.Consumer(setupCtx, ConsumerName)
 	if err != nil {
 		if err == jetstream.ErrConsumerNotFound {
 			consumer, err = stream.CreateConsumer(setupCtx, jetstream.ConsumerConfig{
@@ -93,86 +168,84 @@ func main() {
 				MaxAckPending: 1000,
 			})
 			if err != nil {
-				slog.Error("Failed to create consumer", "error", err)
+				logger.Error("Failed to create consumer", "error", err)
 				os.Exit(1)
 			}
-			slog.Info("Created consumer", "consumer", ConsumerName)
+			logger.Info("Created consumer", "consumer", ConsumerName)
 		} else {
-			slog.Error("Failed to get consumer", "error", err)
+			logger.Error("Failed to get consumer", "error", err)
 			os.Exit(1)
 		}
 	}
 
-	slog.Info("Consumer is ready", "consumer", ConsumerName)
+	logger.Info("Consumer is ready", "consumer", ConsumerName)
 
-	consumeHandle, err := consumer.Consume(func(msg jetstream.Msg) {
-		var event events.DocumentCreatedEvent
-		err := json.Unmarshal(msg.Data(), &event)
-		if err != nil {
-			slog.Error("Failed to unmarshal message", "error", err)
-			msg.Nak()
-			return
-		}
+	return consumer
+}
 
-		skip, retryCount, err := w.ReachedMaxRetries(consumeCtx, event.ID)
-		if err != nil {
-			slog.Error("Failed to check retry count", "id", event.ID, "error", err)
-			msg.Nak()
-			return
-		}
-		if skip {
-			msg.Ack()
-			return
-		}
-
-		locked, err := w.MarkAsProcessing(consumeCtx, event.ID)
-		if err != nil {
-			slog.Error("Failed to mark document as processing", "id", event.ID, "error", err)
-			msg.Nak()
-			return
-		}
-
-		if !locked {
-			slog.Info("Document is already being processed by another worker", "id", event.ID)
-			msg.Ack()
-			return
-		}
-		processResult, err := w.Process(consumeCtx, event)
-		if err != nil {
-			msg.Nak()
-			slog.Error("Failed to process message", "error", err)
-			return
-		}
-		if processResult == worker.ProcessFailed {
-			slog.Error("Document processing failed, will retry if max retries not reached", "id", event.ID)
-
-			err = w.IncrementRetryCount(consumeCtx, event.ID)
-			if err != nil {
-				slog.Error("Failed to increment retry count", "id", event.ID, "error", err)
-			}
-			msg.NakWithDelay(time.Duration(retryCount+2) * time.Second)
-			return
-		} else {
-			slog.Info("Document processed successfully", "id", event.ID)
-			msg.Ack()
-		}
-
-	})
+// process handles a single document event message: it unmarshals the event,
+// checks retry limits, marks the document as processing, invokes the worker logic, manages metrics,
+// and acknowledges or negatively acknowledges the message based on processing outcome.
+func process(consumeCtx context.Context, msg jetstream.Msg, w *worker.Processor) {
+	var event events.DocumentCreatedEvent
+	err := json.Unmarshal(msg.Data(), &event)
 	if err != nil {
-		slog.Error("Failed to start consuming", "error", err)
-		os.Exit(1)
+		logger.Error("Failed to unmarshal message", "error", err)
+		failedCounter.Inc()
+		msg.Nak()
+		return
 	}
-	defer consumeHandle.Stop()
 
-	slog.Info("Worker started successfully", "consumer", ConsumerName)
+	consumerLogger := logger.With("correlation_id", event.CorrelationID, "id", event.ID)
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+	skip, retryCount, err := w.ReachedMaxRetries(consumeCtx, event.ID)
+	if err != nil {
+		consumerLogger.Error("Failed to check retry count", "id", event.ID, "error", err)
+		failedCounter.Inc()
+		msg.Nak()
+		return
+	}
+	if skip {
+		msg.Ack()
+		return
+	}
 
-	sig := <-shutdown
-	slog.Info("Shutdown signal received", "signal", sig)
+	locked, err := w.MarkAsProcessing(consumeCtx, event.ID)
+	if err != nil {
+		consumerLogger.Error("Failed to mark document as processing", "id", event.ID, "error", err)
+		failedCounter.Inc()
+		msg.Nak()
+		return
+	}
 
-	consumeHandle.Drain()
-	consumeCancel()
-	slog.Info("Worker shutdown complete")
+	if !locked {
+		consumerLogger.Info("Document is already being processed by another worker", "id", event.ID)
+		msg.Ack()
+		return
+	}
+	inProgressCounter.Inc()
+	defer inProgressCounter.Dec()
+
+	processResult, err := w.Process(consumeCtx, event)
+	if err != nil {
+		msg.Nak()
+		consumerLogger.Error("Failed to process message", "error", err)
+		failedCounter.Inc()
+		return
+	}
+	if processResult == worker.ProcessFailed {
+		consumerLogger.Error("Document processing failed, will retry if max retries not reached", "id", event.ID)
+
+		err = w.IncrementRetryCount(consumeCtx, event.ID)
+		if err != nil {
+			consumerLogger.Error("Failed to increment retry count", "id", event.ID, "error", err)
+		}
+		msg.NakWithDelay(time.Duration(retryCount+2) * time.Second)
+		failedCounter.Inc()
+		return
+	} else {
+		consumerLogger.Info("Document processed successfully", "id", event.ID)
+		processedCounter.Inc()
+		msg.Ack()
+	}
 }

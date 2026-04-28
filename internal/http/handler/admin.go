@@ -1,8 +1,11 @@
 package handler
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
 
-func RegisterAdminRoutes(r *gin.RouterGroup, workerConnCheck func() bool) {
+func (h *Handler) RegisterAdminRoutes(r *gin.RouterGroup, workerConnCheck func() bool) {
 
 	r.GET("/health", func(c *gin.Context) {
 		if !workerConnCheck() {
@@ -16,5 +19,7 @@ func RegisterAdminRoutes(r *gin.RouterGroup, workerConnCheck func() bool) {
 			Message: "OK",
 		})
 	})
+
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 }

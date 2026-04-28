@@ -30,12 +30,13 @@ func NewDocumentService(publisher Publisher, repo *repository.DocumentsRepositor
 	}
 }
 
-func (s *DocumentService) CreateDocument(ctx context.Context, name string) (string, error) {
+func (s *DocumentService) CreateDocument(ctx context.Context, name string, correlationID string) (string, error) {
 	id := uuid.New()
 
 	event := events.DocumentCreatedEvent{}
 	event.ID = id
 	event.Name = name
+	event.Metadata.CorrelationID = correlationID
 
 	if err := s.repo.CreateDocument(ctx, id, name); err != nil {
 		return "", fmt.Errorf("failed to create document: %w", err)
