@@ -32,3 +32,14 @@ spec:
       volumes:
       - name: nats-data
         emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-svc
+spec:
+  selector:
+    app: nats
+  ports:
+  - port: 4222
+    targetPort: 4222
