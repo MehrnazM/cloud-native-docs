@@ -15,6 +15,7 @@ import (
 	"github.com/MehrnazM/cloud-native-docs/shared/util"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	propagation "go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
@@ -62,6 +63,7 @@ func initTracer() func() {
 			semconv.ServiceName(tracerName),
 		)))
 	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 	return func() {
 		if err := tp.Shutdown(ctx); err != nil {
 			logger.Error("failed to shutdown tracer provider", "error", err)

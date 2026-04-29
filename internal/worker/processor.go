@@ -12,7 +12,6 @@ import (
 	"github.com/bytedance/gopkg/util/logger"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -61,11 +60,7 @@ func (p *Processor) IncrementRetryCount(ctx context.Context, id uuid.UUID) error
 }
 
 func (p *Processor) Process(ctx context.Context, doc events.DocumentCreatedEvent) (ProcessResult, error) {
-	ctx, span := p.tracer.Start(ctx, "Processor.Process", trace.WithAttributes(
-		attribute.String("document.id", doc.ID.String()),
-		attribute.String("document.name", doc.Name),
-		attribute.String("correlation.id", doc.Metadata.CorrelationID),
-	))
+	ctx, span := p.tracer.Start(ctx, "Processor.Process")
 	defer span.End()
 
 	logger.Info("received document, start processing document", "id", doc.ID)

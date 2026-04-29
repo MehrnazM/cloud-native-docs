@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
@@ -91,6 +92,7 @@ func initTracer() func() {
 			semconv.ServiceName(tracerName),
 		)))
 	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 	return func() {
 		if err := tp.Shutdown(ctx); err != nil {
 			logger.Error("failed to shutdown tracer provider", "error", err)
@@ -124,11 +126,8 @@ func main() {
 
 	consumer := getConsumer(conn)
 
-	consumeCtx, consumeCancel := context.WithCancel(context.Background())
-	defer consumeCancel()
-
 	consumeHandle, err := consumer.Consume(func(msg jetstream.Msg) {
-		process(consumeCtx, msg, w)
+		process(msg, w)
 	})
 	if err != nil {
 		logger.Error("Failed to start consuming", "error", err)
@@ -151,7 +150,6 @@ func main() {
 	logger.Info("Shutdown signal received", "signal", sig)
 
 	consumeHandle.Drain()
-	consumeCancel()
 	logger.Info("Worker shutdown complete")
 }
 
@@ -220,7 +218,7 @@ func getConsumer(conn *messaging.Connection) jetstream.Consumer {
 // process handles a single document event message: it unmarshals the event,
 // checks retry limits, marks the document as processing, invokes the worker logic, manages metrics,
 // and acknowledges or negatively acknowledges the message based on processing outcome.
-func process(consumeCtx context.Context, msg jetstream.Msg, w *worker.Processor) {
+func process(msg jetstream.Msg, w *worker.Processor) {
 	var event events.DocumentCreatedEvent
 	err := json.Unmarshal(msg.Data(), &event)
 	if err != nil {
@@ -231,6 +229,8 @@ func process(consumeCtx context.Context, msg jetstream.Msg, w *worker.Processor)
 	}
 
 	consumerLogger := logger.With("correlation_id", event.CorrelationID, "id", event.ID)
+	carrier := propagation.MapCarrier(event.Metadata.TraceContext)
+	consumeCtx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
 
 	skip, retryCount, err := w.ReachedMaxRetries(consumeCtx, event.ID)
 	if err != nil {

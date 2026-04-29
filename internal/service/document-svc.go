@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -51,6 +52,9 @@ func (s *DocumentService) CreateDocument(ctx context.Context, name string, corre
 	event.Metadata.CorrelationID = correlationID
 	event.Metadata.TraceID = span.SpanContext().TraceID().String()
 
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	event.Metadata.TraceContext = carrier
 	if err := s.repo.CreateDocument(ctx, id, name); err != nil {
 		return "", fmt.Errorf("failed to create document: %w", err)
 	}
