@@ -8,15 +8,22 @@ import (
 	"github.com/MehrnazM/cloud-native-docs/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Handler struct {
 	logger *slog.Logger
 	svc    *service.DocumentService
+	tracer trace.Tracer
 }
 
-func NewHandler(svc *service.DocumentService, logger *slog.Logger) *Handler {
-	return &Handler{svc: svc, logger: logger}
+func NewHandler(svc *service.DocumentService, logger *slog.Logger, tracerName string) *Handler {
+	return &Handler{
+		svc:    svc,
+		logger: logger,
+		tracer: otel.Tracer(tracerName),
+	}
 }
 
 func (h *Handler) RegisterDocumentRoutes(r *gin.RouterGroup) {
@@ -30,6 +37,9 @@ type CreateDocumentRequest struct {
 
 func (h *Handler) CreateDocument() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx, span := h.tracer.Start(c.Request.Context(), "POST /documents")
+		defer span.End()
+
 		var req CreateDocumentRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			h.logger.Error("failed to read and validate the body: ", "error", err)
@@ -48,7 +58,7 @@ func (h *Handler) CreateDocument() gin.HandlerFunc {
 			})
 			return
 		}
-		id, err := h.svc.CreateDocument(c.Request.Context(), req.Name, c.GetString("requestID"))
+		id, err := h.svc.CreateDocument(ctx, req.Name, c.GetString("requestID"))
 		if err != nil {
 			h.logger.Error("failed to create document: ", "error", err)
 			c.JSON(500, ErrorResponse{
@@ -67,6 +77,9 @@ func (h *Handler) CreateDocument() gin.HandlerFunc {
 
 func (h *Handler) GetDocumentByID() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx, span := h.tracer.Start(c.Request.Context(), "GET /documents/:id")
+		defer span.End()
+
 		id := c.Param("id")
 		uid, err := uuid.Parse(id)
 		if err != nil {
@@ -78,7 +91,7 @@ func (h *Handler) GetDocumentByID() gin.HandlerFunc {
 			})
 			return
 		}
-		doc, err := h.svc.GetDocumentByID(c.Request.Context(), uid)
+		doc, err := h.svc.GetDocumentByID(ctx, uid)
 		if err != nil {
 			h.logger.Error("failed to get document: ", "error", err)
 			c.JSON(500, ErrorResponse{

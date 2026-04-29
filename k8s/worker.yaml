@@ -31,6 +31,8 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
         env:
+          - name: JAEGER_COLLECTOR
+            value: jaeger-svc:4318
           - name: POSTGRES_HOST
             value: postgres-svc
           - name: POSTGRES_PORT

@@ -9,14 +9,17 @@ import (
 	"github.com/MehrnazM/cloud-native-docs/shared/util"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Connection struct {
-	JS jetstream.JetStream
-	NC *nats.Conn
+	tracer trace.Tracer
+	JS     jetstream.JetStream
+	NC     *nats.Conn
 }
 
-func NewConnection(logger *slog.Logger) (conn *Connection, err error) {
+func NewConnection(logger *slog.Logger, serviceName string) (conn *Connection, err error) {
 	url, err := util.MustGetString("NATS_URL")
 	if err != nil || url == "" {
 		return nil, nats.ErrNoServers
@@ -44,10 +47,13 @@ func NewConnection(logger *slog.Logger) (conn *Connection, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Connection{JS: js, NC: nc}, nil
+	return &Connection{JS: js, NC: nc, tracer: otel.Tracer(serviceName)}, nil
 }
 
 func (c *Connection) Publish(ctx context.Context, subject string, message any, retryWait time.Duration) (err error) {
+	ctx, span := c.tracer.Start(ctx, "Connection.Publish")
+	defer span.End()
+
 	if retryWait == 0 {
 		retryWait = 100 * time.Millisecond
 	}

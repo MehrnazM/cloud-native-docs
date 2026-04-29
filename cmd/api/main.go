@@ -13,10 +13,16 @@ import (
 	"github.com/MehrnazM/cloud-native-docs/internal/repository"
 	"github.com/MehrnazM/cloud-native-docs/internal/service"
 	"github.com/MehrnazM/cloud-native-docs/shared/util"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 const (
 	addr            = ":8080"
+	tracerName      = "docs-api"
 	shutdownTimeout = 20 * time.Second
 )
 
@@ -38,10 +44,38 @@ func init() {
 	slog.SetDefault(logger)
 }
 
+func initTracer() func() {
+	ctx := context.Background()
+	jaeger := util.GetStringEnv("JAEGER_COLLECTOR", "localhost:4318")
+	exporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithEndpoint(jaeger),
+		otlptracehttp.WithInsecure(),
+	)
+	if err != nil {
+		logger.Error("failed to create OTLP trace exporter", "error", err)
+		os.Exit(1)
+	}
+
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName(tracerName),
+		)))
+	otel.SetTracerProvider(tp)
+	return func() {
+		if err := tp.Shutdown(ctx); err != nil {
+			logger.Error("failed to shutdown tracer provider", "error", err)
+		}
+	}
+}
+
 func main() {
 	ctx := context.Background()
 
-	jsConn, err := messaging.NewConnection(logger)
+	tracerShutdown := initTracer()
+	defer tracerShutdown()
+
+	jsConn, err := messaging.NewConnection(logger, tracerName)
 	if err != nil {
 		logger.Error("failed to connect to NATS", "error", err)
 		os.Exit(1)
@@ -55,10 +89,10 @@ func main() {
 	}
 	defer db.Close()
 
-	repo := repository.NewDocumentsRepository(db)
-	svc := service.NewDocumentService(jsConn, repo)
+	repo := repository.NewDocumentsRepository(db, tracerName)
+	svc := service.NewDocumentService(jsConn, repo, tracerName)
 
-	router := http.NewRouter(svc, jsConn.NC.IsConnected, logger)
+	router := http.NewRouter(svc, jsConn.NC.IsConnected, logger, tracerName)
 	server := http.NewServer(addr, router)
 
 	// Start HTTP server

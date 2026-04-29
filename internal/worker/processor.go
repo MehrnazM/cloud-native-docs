@@ -11,6 +11,9 @@ import (
 	"github.com/MehrnazM/cloud-native-docs/shared/events"
 	"github.com/bytedance/gopkg/util/logger"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ProcessResult int
@@ -24,10 +27,11 @@ const (
 type Processor struct {
 	repo   *repository.DocumentsRepository
 	logger *slog.Logger
+	tracer trace.Tracer
 }
 
-func NewProcessor(repo *repository.DocumentsRepository, logger *slog.Logger) *Processor {
-	return &Processor{repo: repo, logger: logger}
+func NewProcessor(repo *repository.DocumentsRepository, logger *slog.Logger, tracerName string) *Processor {
+	return &Processor{repo: repo, logger: logger, tracer: otel.Tracer(tracerName)}
 }
 
 func (p *Processor) ReachedMaxRetries(ctx context.Context, id uuid.UUID) (maxedOut bool, retryCount int, err error) {
@@ -57,6 +61,13 @@ func (p *Processor) IncrementRetryCount(ctx context.Context, id uuid.UUID) error
 }
 
 func (p *Processor) Process(ctx context.Context, doc events.DocumentCreatedEvent) (ProcessResult, error) {
+	ctx, span := p.tracer.Start(ctx, "Processor.Process", trace.WithAttributes(
+		attribute.String("document.id", doc.ID.String()),
+		attribute.String("document.name", doc.Name),
+		attribute.String("correlation.id", doc.Metadata.CorrelationID),
+	))
+	defer span.End()
+
 	logger.Info("received document, start processing document", "id", doc.ID)
 
 	time.Sleep(2 * time.Second)

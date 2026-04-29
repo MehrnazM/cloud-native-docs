@@ -3,7 +3,8 @@ package events
 import "github.com/google/uuid"
 
 type Metadata struct {
-	CorrelationID string `json:"correlation_id"`
+	CorrelationID string `json:"correlationId"`
+	TraceID       string `json:"traceId"`
 }
 type DocumentCreatedEvent struct {
 	Metadata

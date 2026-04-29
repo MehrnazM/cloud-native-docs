@@ -18,12 +18,18 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 const (
 	SubjectDocumentCreated = "documents.created"
 	StreamName             = "DOCUMENT_EVENTS"
 	ConsumerName           = "WORKER_CONSUMER"
+	tracerName             = "docs-worker"
 )
 
 var (
@@ -67,9 +73,37 @@ func init() {
 	prometheus.MustRegister(processedCounter, failedCounter, inProgressCounter)
 }
 
+func initTracer() func() {
+	ctx := context.Background()
+	jaeger := util.GetStringEnv("JAEGER_COLLECTOR", "localhost:4318")
+	exporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithEndpoint(jaeger),
+		otlptracehttp.WithInsecure(),
+	)
+	if err != nil {
+		logger.Error("failed to create OTLP trace exporter", "error", err)
+		os.Exit(1)
+	}
+
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName(tracerName),
+		)))
+	otel.SetTracerProvider(tp)
+	return func() {
+		if err := tp.Shutdown(ctx); err != nil {
+			logger.Error("failed to shutdown tracer provider", "error", err)
+		}
+	}
+}
+
 func main() {
 
-	conn, err := messaging.NewConnection(logger)
+	tracerShutdown := initTracer()
+	defer tracerShutdown()
+
+	conn, err := messaging.NewConnection(logger, tracerName)
 	if err != nil {
 		logger.Error("Failed to connect to NATS", "error", err)
 		os.Exit(1)
@@ -85,8 +119,8 @@ func main() {
 	}
 	defer db.Close()
 
-	repo := repository.NewDocumentsRepository(db)
-	w := worker.NewProcessor(repo, logger)
+	repo := repository.NewDocumentsRepository(db, tracerName)
+	w := worker.NewProcessor(repo, logger, tracerName)
 
 	consumer := getConsumer(conn)
 

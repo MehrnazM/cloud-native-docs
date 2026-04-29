@@ -10,10 +10,10 @@ import (
 	"github.com/google/uuid"
 )
 
-func NewRouter(svc *service.DocumentService, workerConnCheck func() bool, logger *slog.Logger) *gin.Engine {
+func NewRouter(svc *service.DocumentService, workerConnCheck func() bool, logger *slog.Logger, tracerName string) *gin.Engine {
 	router := gin.Default()
 
-	h := handler.NewHandler(svc, logger)
+	h := handler.NewHandler(svc, logger, tracerName)
 
 	v1 := router.Group("/api/v1")
 	v1.Use(requestID())

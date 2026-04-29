@@ -24,6 +24,8 @@ spec:
             memory: "512Mi"
             cpu: "500m"
         env:
+          - name: JAEGER_COLLECTOR
+            value: jaeger-svc:4318
           - name: POSTGRES_HOST
             value: postgres-svc
           - name: POSTGRES_PORT
