@@ -31,14 +31,16 @@ The services communicate via NATS JetStream for event-driven processing, with Po
 ## ✨ Features
 
 - 🚀 **RESTful API** for document creation and retrieval
+- 🔐 **JWT Authentication** with bcrypt password hashing and protected endpoints
 - ⚡ **Asynchronous Processing** with NATS JetStream
 - 🔄 **Retry Mechanism** with configurable max retries
 - 📊 **Metrics & Monitoring** with Prometheus
 - 🔍 **Distributed Tracing** with OpenTelemetry and Jaeger
+- 📈 **Autoscaling** with KEDA based on NATS consumer queue depth
 - 🗄️ **Database Migrations** with migrate tool
 - 🐳 **Containerized** with Docker and Docker Compose
 - ☸️ **Kubernetes Ready** with deployment manifests
-- 🔐 **Health Checks** for both API and Worker services
+- ❤️ **Health Checks** for both API and Worker services
 - 📝 **Structured Logging** with slog (JSON format)
 
 ## 🛠️ Tech Stack
@@ -47,10 +49,12 @@ The services communicate via NATS JetStream for event-driven processing, with Po
 - **Web Framework**: Gin
 - **Database**: PostgreSQL 17
 - **Message Broker**: NATS with JetStream
+- **Authentication**: JWT (golang-jwt/jwt) + bcrypt
+- **Autoscaling**: KEDA (Kubernetes Event-Driven Autoscaling)
 - **Tracing**: OpenTelemetry + Jaeger
 - **Metrics**: Prometheus
 - **Container**: Docker & Docker Compose
-- **Orchestration**: Kubernetes
+- **Orchestration**: Kubernetes (minikube)
 - **Migrations**: golang-migrate
 
 ## 📋 Prerequisites
@@ -114,28 +118,64 @@ The API will be available at `http://localhost:8080`
    kubectl apply -f k8s/worker.yaml
    ```
 
-4. **Deploy monitoring (optional)**
+4. **Deploy autoscaling**
+   ```bash
+   # Install KEDA (requires Helm)
+   helm repo add kedacore https://kedacore.github.io/charts
+   helm repo update
+   helm install keda kedacore/keda --namespace keda --create-namespace
+
+   # Apply the NATS-based scaler
+   kubectl apply -f k8s/worker-keda-scaler.yaml
+   ```
+
+5. **Deploy monitoring (optional)**
    ```bash
    kubectl apply -f k8s/prometheus.yaml
    ```
 
 ## 📡 API Endpoints
 
-### Health Check
+### Authentication (public)
+
+#### Register
 ```bash
-GET /api/v1/health
+POST /api/v1/auth/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "yourpassword"
+}
+```
+
+#### Login
+```bash
+POST /api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "yourpassword"
+}
 ```
 
 **Response:**
 ```json
 {
-  "status": "ok"
+  "message": "user logged in successfully",
+  "data": {
+    "token": "<jwt>"
+  }
 }
 ```
 
-### Create Document
+### Documents (protected — requires `Authorization: Bearer <token>`)
+
+#### Create Document
 ```bash
 POST /api/v1/documents
+Authorization: Bearer <token>
 Content-Type: application/json
 
 {
@@ -153,15 +193,16 @@ Content-Type: application/json
 }
 ```
 
-### Get Document by ID
+#### Get Document by ID
 ```bash
 GET /api/v1/documents/{id}
+Authorization: Bearer <token>
 ```
 
 **Response:**
 ```json
 {
-  "message": "Document found",
+  "message": "Document retrieved successfully",
   "data": {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "name": "my-document",
@@ -174,6 +215,11 @@ GET /api/v1/documents/{id}
 }
 ```
 
+### Health Check (public)
+```bash
+GET /api/v1/health
+```
+
 ## 📁 Project Structure
 
 ```
@@ -182,20 +228,23 @@ cloud-native-docs/
 │   ├── api/           # API service entry point
 │   └── worker/        # Worker service entry point
 ├── internal/
-│   ├── http/          # HTTP server and routing
-│   │   └── handler/   # HTTP handlers
-│   ├── messaging/     # NATS JetStream client
-│   ├── model/         # Domain models
-│   ├── repository/    # Data access layer
-│   ├── service/       # Business logic
-│   └── worker/        # Document processor
+│   ├── http/              # HTTP server and routing
+│   │   ├── handler/       # HTTP handlers (documents, auth, admin)
+│   │   └── middleware/    # JWT auth middleware
+│   ├── messaging/         # NATS JetStream client
+│   ├── model/             # Domain models (Document, User)
+│   ├── repository/        # Data access layer
+│   ├── service/           # Business logic (document, auth)
+│   └── worker/            # Document processor
 ├── shared/
 │   ├── events/        # Event definitions
 │   └── util/          # Utility functions
 ├── migrations/        # Database migration files
 ├── k8s/               # Kubernetes manifests
 │   ├── base/          # ConfigMaps and Secrets
-│   └── dependencies/  # PostgreSQL, NATS, Jaeger
+│   ├── dependencies/  # PostgreSQL, NATS, Jaeger
+│   ├── worker-keda-scaler.yaml  # KEDA ScaledObject for NATS lag-based autoscaling
+│   └── worker-hpa.yaml          # CPU-based HPA (reference, superseded by KEDA)
 ├── docker-compose.yaml
 ├── Dockerfile.api
 ├── Dockerfile.worker
@@ -222,6 +271,25 @@ Both services emit traces to Jaeger. Access the Jaeger UI to view:
 ### Logging
 
 All services use structured JSON logging (slog) with configurable log levels via the `SLOG_LEVEL` environment variable.
+
+## 📈 Autoscaling
+
+The worker scales automatically based on NATS JetStream consumer lag using [KEDA](https://keda.sh/):
+
+| Pending messages | Worker replicas |
+|-----------------|-----------------|
+| 0               | 1 (minimum)     |
+| 10              | 2               |
+| 30              | 3               |
+| 50+             | 5 (maximum)     |
+
+Replicas scale down after a 30-second cooldown once the queue drains. This approach is more accurate than CPU-based scaling for I/O-bound queue workers.
+
+To check current scaling status:
+```bash
+kubectl get scaledobject worker-scaledobject
+kubectl get hpa  # KEDA manages this automatically
+```
 
 ## 🗄️ Database Migrations
 
@@ -258,6 +326,7 @@ Configuration is managed via environment variables:
 | `NATS_URL` | NATS server URL | `nats://localhost:4222` |
 | `JAEGER_COLLECTOR` | Jaeger collector endpoint | `localhost:4318` |
 | `SLOG_LEVEL` | Log level (-4=DEBUG, 0=INFO, 4=WARN, 8=ERROR) | `-4` |
+| `JWT_SECRET` | Secret key for signing JWTs (min 32 bytes) | required |
 
 
 
