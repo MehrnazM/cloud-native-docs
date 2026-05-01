@@ -13,16 +13,18 @@ import (
 )
 
 type Handler struct {
-	logger *slog.Logger
-	svc    *service.DocumentService
-	tracer trace.Tracer
+	logger  *slog.Logger
+	docSvc  *service.DocumentService
+	authSvc *service.AuthService
+	tracer  trace.Tracer
 }
 
-func NewHandler(svc *service.DocumentService, logger *slog.Logger, tracerName string) *Handler {
+func NewHandler(docSvc *service.DocumentService, authSvc *service.AuthService, logger *slog.Logger, tracerName string) *Handler {
 	return &Handler{
-		svc:    svc,
-		logger: logger,
-		tracer: otel.Tracer(tracerName),
+		docSvc:  docSvc,
+		authSvc: authSvc,
+		logger:  logger,
+		tracer:  otel.Tracer(tracerName),
 	}
 }
 
@@ -58,7 +60,7 @@ func (h *Handler) CreateDocument() gin.HandlerFunc {
 			})
 			return
 		}
-		id, err := h.svc.CreateDocument(ctx, req.Name, c.GetString("requestID"))
+		id, err := h.docSvc.CreateDocument(ctx, req.Name, c.GetString("requestID"))
 		if err != nil {
 			h.logger.Error("failed to create document: ", "error", err)
 			c.JSON(500, ErrorResponse{
@@ -91,7 +93,7 @@ func (h *Handler) GetDocumentByID() gin.HandlerFunc {
 			})
 			return
 		}
-		doc, err := h.svc.GetDocumentByID(ctx, uid)
+		doc, err := h.docSvc.GetDocumentByID(ctx, uid)
 		if err != nil {
 			h.logger.Error("failed to get document: ", "error", err)
 			c.JSON(500, ErrorResponse{

@@ -91,10 +91,19 @@ func main() {
 	}
 	defer db.Close()
 
-	repo := repository.NewDocumentsRepository(db, tracerName)
-	svc := service.NewDocumentService(jsConn, repo, tracerName)
+	docRepo := repository.NewDocumentsRepository(db, tracerName)
+	docSvc := service.NewDocumentService(jsConn, docRepo, tracerName)
 
-	router := http.NewRouter(svc, jsConn.NC.IsConnected, logger, tracerName)
+	jwtSecret, err := util.MustGetString("JWT_SECRET")
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+
+	userRepo := repository.NewUsersRepository(db, tracerName)
+	authSvc := service.NewAuthService(userRepo, jwtSecret)
+
+	router := http.NewRouter(docSvc, authSvc, jsConn.NC.IsConnected, logger, tracerName, jwtSecret)
 	server := http.NewServer(addr, router)
 
 	// Start HTTP server

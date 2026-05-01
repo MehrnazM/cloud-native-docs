@@ -47,6 +47,11 @@ spec:
               secretKeyRef:
                 key: POSTGRES_DB
                 name: postgres-secret
+          - name: JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                key: JWT_SECRET
+                name: api-secret
         ports:
         - containerPort: 8080
         livenessProbe:
