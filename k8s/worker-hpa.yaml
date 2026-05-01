@@ -1,0 +1,20 @@
+# We don't need hpa in our example because keda will take care of scaling the worker deployment based on the nats queue length. 
+# However, if you want to set up a hpa for the worker deployment, you can use the following configuration:
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: worker-hpa
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: worker-deployment
+#   minReplicas: 1
+#   maxReplicas: 5
+#   metrics:
+#     - type: Resource
+#       resource:
+#         name: cpu
+#         target:
+#           type: Utilization
+#           averageUtilization: 60
