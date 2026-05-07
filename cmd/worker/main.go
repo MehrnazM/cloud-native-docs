@@ -31,6 +31,9 @@ const (
 	StreamName             = "DOCUMENT_EVENTS"
 	ConsumerName           = "WORKER_CONSUMER"
 	tracerName             = "docs-worker"
+	SubjectDLQ             = "documents.dlq"
+	DLQConsumerName        = "WORKER_DLQ_CONSUMER"
+	DLQStreamName          = "DOCUMENT_DLQ"
 )
 
 var (
@@ -124,10 +127,11 @@ func main() {
 	repo := repository.NewDocumentsRepository(db, tracerName)
 	w := worker.NewProcessor(repo, logger, tracerName)
 
-	consumer := getConsumer(conn)
+	setupDLQStream(conn)
 
+	consumer := getDocumentConsumer(conn)
 	consumeHandle, err := consumer.Consume(func(msg jetstream.Msg) {
-		process(msg, w)
+		process(msg, w, conn)
 	})
 	if err != nil {
 		logger.Error("Failed to start consuming", "error", err)
@@ -153,72 +157,10 @@ func main() {
 	logger.Info("Worker shutdown complete")
 }
 
-// getConsumer ensures the stream and consumer are set up correctly and returns the consumer for processing messages.
-func getConsumer(conn *messaging.Connection) jetstream.Consumer {
-	setupCtx, setupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer setupCancel()
-
-	replicas, err := util.GetIntEnv("NATS_REPLICA", 1)
-	if err != nil {
-		logger.Error("Invalid NATS_REPLICA value", "error", err)
-		os.Exit(1)
-	}
-
-	stream, err := conn.JS.Stream(setupCtx, StreamName)
-	if err != nil {
-		if err == jetstream.ErrStreamNotFound {
-			stream, err = conn.JS.CreateStream(setupCtx, jetstream.StreamConfig{
-				Name:      StreamName,
-				Subjects:  []string{SubjectDocumentCreated},
-				Replicas:  replicas,
-				Retention: jetstream.WorkQueuePolicy,
-				MaxAge:    7 * 24 * time.Hour,
-				MaxMsgs:   100000,
-				Discard:   jetstream.DiscardOld,
-				Storage:   jetstream.FileStorage,
-			})
-			if err != nil {
-				logger.Error("Failed to create stream", "error", err)
-				os.Exit(1)
-			}
-			logger.Info("Created stream", "stream", StreamName)
-		} else {
-			logger.Error("Failed to get stream", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	logger.Info("Stream is ready", "stream", StreamName)
-
-	consumer, err := stream.Consumer(setupCtx, ConsumerName)
-	if err != nil {
-		if err == jetstream.ErrConsumerNotFound {
-			consumer, err = stream.CreateConsumer(setupCtx, jetstream.ConsumerConfig{
-				Durable:       ConsumerName,
-				AckPolicy:     jetstream.AckExplicitPolicy,
-				FilterSubject: SubjectDocumentCreated,
-				MaxAckPending: 1000,
-			})
-			if err != nil {
-				logger.Error("Failed to create consumer", "error", err)
-				os.Exit(1)
-			}
-			logger.Info("Created consumer", "consumer", ConsumerName)
-		} else {
-			logger.Error("Failed to get consumer", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	logger.Info("Consumer is ready", "consumer", ConsumerName)
-
-	return consumer
-}
-
 // process handles a single document event message: it unmarshals the event,
 // checks retry limits, marks the document as processing, invokes the worker logic, manages metrics,
 // and acknowledges or negatively acknowledges the message based on processing outcome.
-func process(msg jetstream.Msg, w *worker.Processor) {
+func process(msg jetstream.Msg, w *worker.Processor, conn *messaging.Connection) {
 	var event events.DocumentCreatedEvent
 	err := json.Unmarshal(msg.Data(), &event)
 	if err != nil {
@@ -232,6 +174,7 @@ func process(msg jetstream.Msg, w *worker.Processor) {
 	carrier := propagation.MapCarrier(event.Metadata.TraceContext)
 	consumeCtx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
 
+	// check if document has reached max document retry number
 	skip, retryCount, err := w.ReachedMaxRetries(consumeCtx, event.ID)
 	if err != nil {
 		consumerLogger.Error("Failed to check retry count", "id", event.ID, "error", err)
@@ -239,11 +182,25 @@ func process(msg jetstream.Msg, w *worker.Processor) {
 		msg.Nak()
 		return
 	}
+
+	// send a message to dead document queue to log the failure
 	if skip {
+		failedRecord := events.DLQEvent{
+			OriginalEvent: event,
+			FailureReason: "reached max retry",
+			RetryCount:    retryCount,
+			FailedAt:      time.Now().UTC(),
+		}
+		if err := conn.Publish(consumeCtx, SubjectDLQ, failedRecord, 0); err != nil {
+			consumerLogger.Error("Failed to publish to DLQ", "id", event.ID, "error", err)
+		}
+		consumerLogger.Warn("Document moved to DLQ", "id", event.ID, "retryCount", retryCount)
+		failedCounter.Inc()
 		msg.Ack()
 		return
 	}
 
+	// check if another worker has picked the document otherwise marked it as locked
 	locked, err := w.MarkAsProcessing(consumeCtx, event.ID)
 	if err != nil {
 		consumerLogger.Error("Failed to mark document as processing", "id", event.ID, "error", err)
@@ -257,6 +214,7 @@ func process(msg jetstream.Msg, w *worker.Processor) {
 		msg.Ack()
 		return
 	}
+
 	inProgressCounter.Inc()
 	defer inProgressCounter.Dec()
 

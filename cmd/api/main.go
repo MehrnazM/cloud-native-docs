@@ -103,7 +103,7 @@ func main() {
 	userRepo := repository.NewUsersRepository(db, tracerName)
 	authSvc := service.NewAuthService(userRepo, jwtSecret)
 
-	router := http.NewRouter(docSvc, authSvc, jsConn.NC.IsConnected, logger, tracerName, jwtSecret)
+	router := http.NewRouter(docSvc, authSvc, jsConn.NC.IsConnected, logger, tracerName, jwtSecret, jsConn)
 	server := http.NewServer(addr, router)
 
 	// Start HTTP server

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MehrnazM/cloud-native-docs/internal/messaging"
 	"github.com/MehrnazM/cloud-native-docs/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -17,14 +18,16 @@ type Handler struct {
 	docSvc  *service.DocumentService
 	authSvc *service.AuthService
 	tracer  trace.Tracer
+	conn    *messaging.Connection
 }
 
-func NewHandler(docSvc *service.DocumentService, authSvc *service.AuthService, logger *slog.Logger, tracerName string) *Handler {
+func NewHandler(docSvc *service.DocumentService, authSvc *service.AuthService, logger *slog.Logger, tracerName string, conn *messaging.Connection) *Handler {
 	return &Handler{
 		docSvc:  docSvc,
 		authSvc: authSvc,
 		logger:  logger,
 		tracer:  otel.Tracer(tracerName),
+		conn:    conn,
 	}
 }
 

@@ -6,25 +6,27 @@ import (
 
 	"github.com/MehrnazM/cloud-native-docs/internal/http/handler"
 	"github.com/MehrnazM/cloud-native-docs/internal/http/middleware"
+	"github.com/MehrnazM/cloud-native-docs/internal/messaging"
 	"github.com/MehrnazM/cloud-native-docs/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 func NewRouter(docSvc *service.DocumentService, authSvc *service.AuthService, workerConnCheck func() bool,
-	logger *slog.Logger, tracerName, jwtSecret string) *gin.Engine {
+	logger *slog.Logger, tracerName, jwtSecret string, conn *messaging.Connection) *gin.Engine {
 	router := gin.Default()
 
-	h := handler.NewHandler(docSvc, authSvc, logger, tracerName)
+	h := handler.NewHandler(docSvc, authSvc, logger, tracerName, conn)
 
 	v1 := router.Group("/api/v1")
 	v1.Use(requestID())
 
 	protected := v1.Group("/")
 	protected.Use((middleware.AuthMiddleware([]byte(jwtSecret))))
+
 	h.RegisterDocumentRoutes(protected)
 	h.RegisterAuthRoutes(v1.Group("/auth"))
-	h.RegisterAdminRoutes(v1, workerConnCheck)
+	h.RegisterAdminRoutes(v1, protected, workerConnCheck)
 
 	router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{
