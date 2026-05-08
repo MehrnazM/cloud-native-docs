@@ -1,6 +1,6 @@
 # Cloud Native Docs
 
-A cloud-native, microservices-based document processing system built with Go, featuring asynchronous processing, distributed tracing, and comprehensive observability.
+A cloud-native, microservices-based document processing system built with Go, featuring asynchronous processing, distributed tracing, dead letter queue handling, and comprehensive observability.
 
 ## 🏗️ Architecture
 
@@ -33,9 +33,11 @@ The services communicate via NATS JetStream for event-driven processing, with Po
 - 🚀 **RESTful API** for document creation and retrieval
 - 🔐 **JWT Authentication** with bcrypt password hashing and protected endpoints
 - ⚡ **Asynchronous Processing** with NATS JetStream
-- 🔄 **Retry Mechanism** with configurable max retries
-- 📊 **Metrics & Monitoring** with Prometheus
-- 🔍 **Distributed Tracing** with OpenTelemetry and Jaeger
+- 🔄 **Retry Mechanism** with configurable max retries and exponential backoff
+- ☠️ **Dead Letter Queue** for permanently failed documents with admin inspection endpoint
+- 📊 **Metrics & Monitoring** with Prometheus (counters, gauges, and duration histograms)
+- 📉 **Grafana Dashboards** provisioned as code for real-time system visibility
+- 🔍 **Distributed Tracing** with OpenTelemetry and Jaeger (document-level span attributes)
 - 📈 **Autoscaling** with KEDA based on NATS consumer queue depth
 - 🗄️ **Database Migrations** with migrate tool
 - 🐳 **Containerized** with Docker and Docker Compose
@@ -52,7 +54,7 @@ The services communicate via NATS JetStream for event-driven processing, with Po
 - **Authentication**: JWT (golang-jwt/jwt) + bcrypt
 - **Autoscaling**: KEDA (Kubernetes Event-Driven Autoscaling)
 - **Tracing**: OpenTelemetry + Jaeger
-- **Metrics**: Prometheus
+- **Metrics**: Prometheus + Grafana
 - **Container**: Docker & Docker Compose
 - **Orchestration**: Kubernetes (minikube)
 - **Migrations**: golang-migrate
@@ -129,9 +131,10 @@ The API will be available at `http://localhost:8080`
    kubectl apply -f k8s/worker-keda-scaler.yaml
    ```
 
-5. **Deploy monitoring (optional)**
+5. **Deploy monitoring**
    ```bash
    kubectl apply -f k8s/prometheus.yaml
+   kubectl apply -f k8s/grafana.yaml
    ```
 
 ## 📡 API Endpoints
@@ -215,6 +218,35 @@ Authorization: Bearer <token>
 }
 ```
 
+### Admin (protected — requires `Authorization: Bearer <token>`)
+
+#### Get DLQ Messages
+```bash
+GET /api/v1/admin/dlq?limit=50
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "message": "DLQ messages retrieved successfully",
+  "data": {
+    "count": 1,
+    "messages": [
+      {
+        "originalEvent": {
+          "id": "550e8400-e29b-41d4-a716-446655440000",
+          "name": "my-document"
+        },
+        "failureReason": "reached max retry",
+        "retryCount": 3,
+        "failedAt": "2026-05-08T10:30:00Z"
+      }
+    ]
+  }
+}
+```
+
 ### Health Check (public)
 ```bash
 GET /api/v1/health
@@ -243,6 +275,8 @@ cloud-native-docs/
 ├── k8s/               # Kubernetes manifests
 │   ├── base/          # ConfigMaps and Secrets
 │   ├── dependencies/  # PostgreSQL, NATS, Jaeger
+│   ├── prometheus.yaml          # Prometheus deployment
+│   ├── grafana.yaml             # Grafana deployment with provisioned dashboard
 │   ├── worker-keda-scaler.yaml  # KEDA ScaledObject for NATS lag-based autoscaling
 │   └── worker-hpa.yaml          # CPU-based HPA (reference, superseded by KEDA)
 ├── docker-compose.yaml
@@ -255,18 +289,38 @@ cloud-native-docs/
 
 ### Metrics (Prometheus)
 
-The worker service exposes Prometheus metrics at `/metrics`:
+The worker service exposes Prometheus metrics at `:9090/metrics`:
 
-- `documents_processed_total`: Total number of successfully processed documents
-- `documents_failed_total`: Total number of failed documents
-- `documents_in_processing`: Current number of documents being processed
+- `documents_processed_total`: Total successfully processed documents
+- `documents_failed_total`: Total failed documents (includes DLQ moves)
+- `documents_in_processing`: Current documents being processed (gauge)
+- `document_processing_duration_seconds`: Processing duration histogram with `status` label (`done`/`failed`)
+
+Query example — 95th percentile processing time:
+```
+histogram_quantile(0.95, rate(document_processing_duration_seconds_bucket[5m]))
+```
+
+### Dashboards (Grafana)
+
+Grafana is deployed with a provisioned dashboard (defined as code in `k8s/grafana.yaml`) — no manual setup required. Access at port `30300`:
+
+```bash
+kubectl port-forward svc/grafana-svc 3000:3000
+# or via minikube: http://$(minikube ip):30300
+```
+
+The dashboard includes panels for processed/failed document counts, in-flight documents, processing rate over time, and p95 processing duration by status.
 
 ### Distributed Tracing (Jaeger)
 
-Both services emit traces to Jaeger. Access the Jaeger UI to view:
-- Request traces across API and Worker
-- Service dependencies
-- Performance bottlenecks
+Both services emit traces to Jaeger. Each document trace carries span attributes for debugging individual documents:
+
+- `document.id`: UUID of the document being processed
+- `document.name`: Document name
+- `document.status`: Final status (`done`, `failed`, `error`)
+
+Failed spans are tagged with error status and the original error, making them visually distinct in the Jaeger UI.
 
 ### Logging
 
@@ -306,11 +360,13 @@ migrate -path ./migrations \
 
 1. Client creates a document via POST `/api/v1/documents`
 2. API service stores the document in PostgreSQL with `pending` status
-3. API publishes `documents.created` event to NATS JetStream
-4. Worker consumes the event and processes the document
+3. API publishes `documents.created` event to NATS JetStream (`DOCUMENT_EVENTS` stream)
+4. Worker consumes the event, acquires a DB-level lock, and processes the document
 5. Worker updates the document status to `done` or `failed`
-6. If processing fails, the worker retries up to max retries (default: 3)
-7. Metrics and traces are collected throughout the process
+6. If processing fails, the worker increments the retry count and NAKs with backoff delay
+7. Once max retries are exhausted, the document is published to the `DOCUMENT_DLQ` stream and the original message is acknowledged
+8. Admins can inspect dead-lettered documents via `GET /api/v1/admin/dlq`
+9. Metrics and distributed traces are collected throughout the process
 
 ## 🔧 Configuration
 
@@ -327,6 +383,7 @@ Configuration is managed via environment variables:
 | `JAEGER_COLLECTOR` | Jaeger collector endpoint | `localhost:4318` |
 | `SLOG_LEVEL` | Log level (-4=DEBUG, 0=INFO, 4=WARN, 8=ERROR) | `-4` |
 | `JWT_SECRET` | Secret key for signing JWTs (min 32 bytes) | required |
+| `DLQ_LIMIT` | Default page size for DLQ admin endpoint | `50` |
 
 
 
@@ -355,3 +412,5 @@ This project is open source and available under the [MIT License](LICENSE).
 - [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream)
 - [OpenTelemetry](https://opentelemetry.io/)
 - [Prometheus](https://prometheus.io/)
+- [Grafana](https://grafana.com/)
+- [KEDA](https://keda.sh/)

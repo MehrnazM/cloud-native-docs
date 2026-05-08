@@ -12,6 +12,8 @@ import (
 	"github.com/bytedance/gopkg/util/logger"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -63,6 +65,10 @@ func (p *Processor) Process(ctx context.Context, doc events.DocumentCreatedEvent
 	ctx, span := p.tracer.Start(ctx, "Processor.Process")
 	defer span.End()
 
+	span.SetAttributes(
+		attribute.String("document.id", doc.ID.String()),
+		attribute.String("document.name", doc.Name),
+	)
 	logger.Info("received document, start processing document", "id", doc.ID)
 
 	time.Sleep(2 * time.Second)
@@ -71,15 +77,23 @@ func (p *Processor) Process(ctx context.Context, doc events.DocumentCreatedEvent
 		_, err := p.repo.UpdateDocumentStatus(ctx, doc.ID, model.StatusFailed)
 		if err != nil {
 			logger.Error("failed to update document status", "id", doc.ID, "error", err)
+			span.SetAttributes(attribute.String("document.status", "error"))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return ProcessUnknown, err
 		}
+		span.SetAttributes(attribute.String("document.status", "failed"))
 		return ProcessFailed, nil
 	} else {
 		_, err := p.repo.UpdateDocumentStatus(ctx, doc.ID, model.StatusDone)
 		if err != nil {
 			logger.Error("failed to update document status", "id", doc.ID, "error", err)
+			span.SetAttributes(attribute.String("document.status", "error"))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return -1, err
 		}
+		span.SetAttributes(attribute.String("document.status", "done"))
 		return ProcessSuccess, nil
 	}
 

@@ -56,6 +56,14 @@ var (
 			Help: "Current documents being processed",
 		},
 	)
+	processingDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "document_processing_duration_seconds",
+			Help:    "Time spent processing a document",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"status"},
+	)
 )
 var logger *slog.Logger
 
@@ -74,7 +82,7 @@ func init() {
 	logger = logger.With("service", "worker", "operation", "document_processing")
 	slog.SetDefault(logger)
 
-	prometheus.MustRegister(processedCounter, failedCounter, inProgressCounter)
+	prometheus.MustRegister(processedCounter, failedCounter, inProgressCounter, processingDuration)
 }
 
 func initTracer() func() {
@@ -218,7 +226,9 @@ func process(msg jetstream.Msg, w *worker.Processor, conn *messaging.Connection)
 	inProgressCounter.Inc()
 	defer inProgressCounter.Dec()
 
+	start := time.Now()
 	processResult, err := w.Process(consumeCtx, event)
+	duration := time.Since(start)
 	if err != nil {
 		msg.Nak()
 		consumerLogger.Error("Failed to process message", "error", err)
@@ -226,6 +236,7 @@ func process(msg jetstream.Msg, w *worker.Processor, conn *messaging.Connection)
 		return
 	}
 	if processResult == worker.ProcessFailed {
+		processingDuration.WithLabelValues("failed").Observe(duration.Seconds())
 		consumerLogger.Error("Document processing failed, will retry if max retries not reached", "id", event.ID)
 
 		err = w.IncrementRetryCount(consumeCtx, event.ID)
@@ -236,6 +247,7 @@ func process(msg jetstream.Msg, w *worker.Processor, conn *messaging.Connection)
 		failedCounter.Inc()
 		return
 	} else {
+		processingDuration.WithLabelValues("done").Observe(duration.Seconds())
 		consumerLogger.Info("Document processed successfully", "id", event.ID)
 		processedCounter.Inc()
 		msg.Ack()
