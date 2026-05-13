@@ -36,6 +36,8 @@ spec:
               value: "disabled"
             - name: GF_SECURITY_ALLOW_EMBEDDING
               value: "true"
+            - name: GF_SECURITY_CSRF_TRUSTED_ORIGINS
+              value: "*.cloudshell.dev"
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
