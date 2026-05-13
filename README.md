@@ -404,6 +404,20 @@ Both services emit traces to Jaeger. Each document trace carries span attributes
 
 Failed spans are tagged with error status and the original error, making them visually distinct in the Jaeger UI.
 
+### Screenshots
+
+**Grafana Dashboard** — documents processed, failed, in-flight, processing rate, and p95 duration by status, all provisioned as code:
+
+![Grafana Dashboard](docs/screenshots/grafana-dashboard.png)
+
+**GKE Cluster** — all services running on GKE Autopilot with external LoadBalancer IPs for the API and Grafana:
+
+![kubectl get pods and services](docs/screenshots/gke-pods-services.png)
+
+**Jaeger Trace** — single distributed trace spanning the API (`docs-api`) through NATS to the Worker (`docs-worker`), showing the full document lifecycle including retry attempts:
+
+![Jaeger Distributed Trace](docs/screenshots/jaeger-trace.png)
+
 ### Logging
 
 All services use structured JSON logging (slog) with configurable log levels via the `SLOG_LEVEL` environment variable.
