@@ -1,3 +1,4 @@
+# Local development only - on GKE the DB is created manually and not via the init script
 apiVersion: v1
 kind: ConfigMap
 metadata:

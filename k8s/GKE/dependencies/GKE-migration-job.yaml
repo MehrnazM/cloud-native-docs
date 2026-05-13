@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migration
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.0
+          restartPolicy: Always
+          args:
+            - "--structured-logs"
+            - "--port=5432"
+            - "cloud-native-docs-495722:us-west1:cloud-native-docs-db"
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/sa-key.json
+          securityContext:
+            runAsNonRoot: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+          volumeMounts:
+            - name: sa-key
+              mountPath: /secrets
+              readOnly: true
+      containers:
+        - name: migrate
+          image: us-west1-docker.pkg.dev/cloud-native-docs-495722/cloud-native-docs/api:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              migrate \
+              -path /migrations \
+              -database "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${DB_PORT}/${POSTGRES_DB}?sslmode=disable" \
+              up
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          env:
+            - name: DB_HOST
+              value: "127.0.0.1"
+            - name: DB_PORT
+              value: "5432"
+      volumes:
+        - name: sa-key
+          secret:
+            secretName: cloudsql-sa-key

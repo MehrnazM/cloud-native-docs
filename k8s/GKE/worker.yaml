@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-deployment
+spec:
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+      - name: worker
+        image: us-west1-docker.pkg.dev/cloud-native-docs-495722/cloud-native-docs/worker:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9090
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+        livenessProbe:
+          exec:
+            command: ["pgrep", "worker"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        env:
+          - name: JAEGER_COLLECTOR
+            value: jaeger-svc:4318
+          - name: POSTGRES_HOST
+            value: "127.0.0.1"
+          - name: POSTGRES_PORT
+            value: "5432"
+          - name: NATS_URL
+            value: nats://nats-svc:4222
+          - name: POSTGRES_USER
+            valueFrom:
+              secretKeyRef:
+                key: POSTGRES_USER
+                name: postgres-secret
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: POSTGRES_PASSWORD
+                name: postgres-secret
+          - name: POSTGRES_DB
+            valueFrom:
+              secretKeyRef:
+                key: POSTGRES_DB
+                name: postgres-secret
+      - name: cloud-sql-proxy
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.0
+        args:
+          - "--structured-logs"
+          - "--port=5432"
+          - "cloud-native-docs-495722:us-west1:cloud-native-docs-db"
+        env:
+          - name: GOOGLE_APPLICATION_CREDENTIALS
+            value: /secrets/sa-key.json
+        securityContext:
+          runAsNonRoot: true
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+          - name: sa-key
+            mountPath: /secrets
+            readOnly: true
+      volumes:
+        - name: sa-key
+          secret:
+            secretName: cloudsql-sa-key
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-svc
+spec:
+  type: ClusterIP
+  selector:
+    app: worker
+  ports:
+  - port: 9090
+    targetPort: 9090

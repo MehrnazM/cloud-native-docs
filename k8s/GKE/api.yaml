@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: api
-        image: mehrnazm/docs-api:v1.0.0
+        image: us-west1-docker.pkg.dev/cloud-native-docs-495722/cloud-native-docs/api:latest
         imagePullPolicy: Always
         resources:
           limits:
@@ -27,7 +27,7 @@ spec:
           - name: JAEGER_COLLECTOR
             value: jaeger-svc:4318
           - name: POSTGRES_HOST
-            value: postgres-svc
+            value: "127.0.0.1"
           - name: POSTGRES_PORT
             value: "5432"
           - name: NATS_URL
@@ -66,16 +66,38 @@ spec:
             port: 8080
           initialDelaySeconds: 10
           periodSeconds: 5
+      - name: cloud-sql-proxy
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.0
+        args:
+          - "--structured-logs"
+          - "--port=5432"
+          - "cloud-native-docs-495722:us-west1:cloud-native-docs-db"
+        env:
+          - name: GOOGLE_APPLICATION_CREDENTIALS
+            value: /secrets/sa-key.json
+        securityContext:
+          runAsNonRoot: true
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+          - name: sa-key
+            mountPath: /secrets
+            readOnly: true
+      volumes:
+        - name: sa-key
+          secret:
+            secretName: cloudsql-sa-key
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: api-svc
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: api
   ports:
-  - port: 8080
+  - port: 80
     targetPort: 8080
-    nodePort: 30080
