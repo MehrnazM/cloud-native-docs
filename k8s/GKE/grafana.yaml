@@ -31,6 +31,11 @@ spec:
           image: grafana/grafana:latest
           ports:
             - containerPort: 3000
+          env:
+            - name: GF_SECURITY_COOKIE_SAMESITE
+              value: "disabled"
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
