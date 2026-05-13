@@ -61,13 +61,12 @@ kind: Service
 metadata:
   name: grafana-svc
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: grafana
   ports:
     - port: 3000
       targetPort: 3000
-      nodePort: 30300
 ---
 apiVersion: v1
 kind: ConfigMap
