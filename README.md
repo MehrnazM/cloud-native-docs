@@ -2,6 +2,18 @@
 
 A cloud-native, microservices-based document processing system built with Go, featuring asynchronous processing, distributed tracing, dead letter queue handling, and comprehensive observability.
 
+## 🎯 Project Focus
+
+This project is intentionally focused on **distributed systems engineering**, not business logic. The document API is deliberately simple — the goal is to demonstrate:
+
+- **Distributed systems design**: event-driven architecture, async processing, message guarantees
+- **Reliability patterns**: retry with backoff, dead letter queues, idempotency, concurrency control
+- **Observability**: structured logging, Prometheus metrics, distributed tracing with Jaeger, Grafana dashboards
+- **Container orchestration**: Docker, Kubernetes (local with minikube, cloud with GKE Autopilot)
+- **Cloud-native infrastructure**: managed database (Cloud SQL), container registry (Artifact Registry), cloud-native autoscaling (KEDA)
+
+The simplicity of the API surface is a deliberate trade-off — it keeps the focus on the infrastructure and system design layers that matter most in production backend engineering.
+
 ## 🏗️ Architecture
 
 This system consists of two main microservices:
@@ -102,22 +114,22 @@ The services communicate via NATS JetStream for event-driven processing, with Po
 
 The API will be available at `http://localhost:8080`
 
-### Using Kubernetes
+### Using Kubernetes (local — minikube)
 
 1. **Apply base configurations**
    ```bash
-   kubectl apply -f k8s/base/
+   kubectl apply -f k8s/local/base/
    ```
 
 2. **Deploy dependencies**
    ```bash
-   kubectl apply -f k8s/dependencies/
+   kubectl apply -f k8s/local/dependencies/
    ```
 
 3. **Deploy API and Worker**
    ```bash
-   kubectl apply -f k8s/api.yaml
-   kubectl apply -f k8s/worker.yaml
+   kubectl apply -f k8s/local/api.yaml
+   kubectl apply -f k8s/local/worker.yaml
    ```
 
 4. **Deploy autoscaling**
@@ -128,14 +140,75 @@ The API will be available at `http://localhost:8080`
    helm install keda kedacore/keda --namespace keda --create-namespace
 
    # Apply the NATS-based scaler
-   kubectl apply -f k8s/worker-keda-scaler.yaml
+   kubectl apply -f k8s/local/worker-keda-scaler.yaml
    ```
 
 5. **Deploy monitoring**
    ```bash
-   kubectl apply -f k8s/prometheus.yaml
-   kubectl apply -f k8s/grafana.yaml
+   kubectl apply -f k8s/local/grafana.yaml
    ```
+
+### Using Kubernetes (GKE — Google Cloud)
+
+Prerequisites: GCP project with billing enabled, `gcloud` CLI, `kubectl`, and `helm` installed.
+
+1. **Create GKE Autopilot cluster**
+   ```bash
+   gcloud container clusters create-auto <cluster-name> --region=us-west1
+   gcloud container clusters get-credentials <cluster-name> --region=us-west1
+   ```
+
+2. **Create Cloud SQL PostgreSQL instance** via GCP Console (SQL → Create Instance → PostgreSQL), then create the `documents` database.
+
+3. **Run database migrations** using Cloud SQL Auth Proxy:
+   ```bash
+   ./cloud-sql-proxy <CONNECTION_NAME> &
+   ./migrate -path ./migrations \
+     -database "postgresql://postgres:<PASSWORD>@127.0.0.1:5432/documents?sslmode=disable" up
+   ```
+
+4. **Push images to Artifact Registry**
+   ```bash
+   gcloud artifacts repositories create cloud-native-docs --repository-format=docker --location=us-west1
+   gcloud builds submit --tag us-west1-docker.pkg.dev/<PROJECT_ID>/cloud-native-docs/api:latest .
+   gcloud builds submit --tag us-west1-docker.pkg.dev/<PROJECT_ID>/cloud-native-docs/worker:latest -f Dockerfile.worker .
+   ```
+
+5. **Create Kubernetes secrets**
+   ```bash
+   kubectl create secret generic postgres-secret \
+     --from-literal=POSTGRES_USER=postgres \
+     --from-literal=POSTGRES_PASSWORD=<PASSWORD> \
+     --from-literal=POSTGRES_DB=documents
+
+   kubectl create secret generic api-secret \
+     --from-literal=JWT_SECRET=<JWT_SECRET>
+
+   kubectl create secret generic cloudsql-sa-key \
+     --from-file=sa-key.json=sa-key.json
+   ```
+
+6. **Install KEDA**
+   ```bash
+   helm repo add kedacore https://kedacore.github.io/charts
+   helm repo update
+   helm install keda kedacore/keda --namespace keda --create-namespace
+   ```
+
+7. **Deploy everything**
+   ```bash
+   kubectl apply -f k8s/GKE/base/
+   kubectl apply -f k8s/GKE/dependencies/
+   kubectl apply -f k8s/GKE/api.yaml
+   kubectl apply -f k8s/GKE/worker.yaml
+   kubectl apply -f k8s/GKE/grafana.yaml
+   kubectl apply -f k8s/GKE/worker-keda-scaler.yaml
+   ```
+
+The API will be available at the LoadBalancer external IP:
+```bash
+kubectl get service api-svc
+```
 
 ## 📡 API Endpoints
 
@@ -272,13 +345,22 @@ cloud-native-docs/
 │   ├── events/        # Event definitions
 │   └── util/          # Utility functions
 ├── migrations/        # Database migration files
-├── k8s/               # Kubernetes manifests
-│   ├── base/          # ConfigMaps and Secrets
-│   ├── dependencies/  # PostgreSQL, NATS, Jaeger
-│   ├── prometheus.yaml          # Prometheus deployment
-│   ├── grafana.yaml             # Grafana deployment with provisioned dashboard
-│   ├── worker-keda-scaler.yaml  # KEDA ScaledObject for NATS lag-based autoscaling
-│   └── worker-hpa.yaml          # CPU-based HPA (reference, superseded by KEDA)
+├── k8s/
+│   ├── local/                   # Minikube local development manifests
+│   │   ├── base/                # ConfigMaps and Secrets
+│   │   ├── dependencies/        # PostgreSQL, NATS, Jaeger, Prometheus
+│   │   ├── api.yaml
+│   │   ├── worker.yaml
+│   │   ├── grafana.yaml
+│   │   ├── worker-keda-scaler.yaml
+│   │   └── worker-hpa.yaml
+│   └── GKE/                     # Google Kubernetes Engine manifests
+│       ├── base/                # Prometheus config
+│       ├── dependencies/        # NATS, Jaeger, Prometheus, migration job
+│       ├── api.yaml             # API + Cloud SQL Auth Proxy sidecar
+│       ├── worker.yaml          # Worker + Cloud SQL Auth Proxy sidecar
+│       ├── grafana.yaml
+│       └── worker-keda-scaler.yaml
 ├── docker-compose.yaml
 ├── Dockerfile.api
 ├── Dockerfile.worker
